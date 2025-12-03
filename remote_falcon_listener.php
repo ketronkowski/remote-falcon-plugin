@@ -497,7 +497,7 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
 function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $additionalWaitTime, $remotePlaylist, $remoteToken) {
   // Check if we're in background mode and a request just arrived
   if ($GLOBALS['inBackgroundMode']) {
-    // Check for requests - this will dequeue if found
+    // Peek first to see if there's a request (don't dequeue yet)
     if ($viewerControlMode == "voting") {
       $highestVoted = highestVotedSequence($remoteToken);
       if ($highestVoted->winningPlaylist != null) {
@@ -510,9 +510,11 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         return;
       }
     } else {
-      $nextInQueue = nextPlaylistInQueue($remoteToken);
+      $nextInQueue = peekNextPlaylistInQueue($remoteToken);
       if ($nextInQueue->nextPlaylist != null) {
         logEntry("Request detected! Switching back from background mode (interrupt) - Jukebox");
+        // Now dequeue it since we're about to play it
+        $nextInQueue = nextPlaylistInQueue($remoteToken);
         $GLOBALS['inBackgroundMode'] = false;
         $GLOBALS['lastModeSwitch'] = time();
         insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
@@ -540,7 +542,8 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         }
       }
       
-      // Check if we recently interrupted - prevent rapid fire interrupts
+      // Not on remote playlist - check for requests to interrupt with
+      // Only interrupt if we're NOT already transitioning (checked via timing)
       $timeSinceLastInterrupt = time() - $GLOBALS['lastQueuedTime'];
       if($timeSinceLastInterrupt < ($requestFetchTime + $additionalWaitTime + 2)) {
         logEntry_verbose("Recently interrupted, skipping. Time since last: " . $timeSinceLastInterrupt . "s");
@@ -581,14 +584,14 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           logEntry("Sleeping for " . $fppWaitTime . " seconds.");
           sleep($fppWaitTime);
         }
-        // Note: Background mode detection is handled at the top of this function (lines 463-471)
-        // to ensure it runs before the timing check
       }
       $end_time = microtime(true);
       $execution_time = ($end_time - $start_time);
       logEntry_verbose("Completed Interrupt Function. Execution time: " . $execution_time * 1000 . " ms");
     }else {
-      doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $additionalWaitTime, $remotePlaylist, $remoteToken);
+      // Already on remote playlist - don't interrupt, let current song finish
+      // The song will naturally transition to the next queued song or back to background
+      logEntry_verbose("Already on remote playlist, not checking for interrupts");
     }
   }
 }
@@ -655,33 +658,43 @@ function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextSchedul
     if($mainPlaylist != null && $mainPlaylist != "" && count($mainPlaylist) > 0) {
       $nextScheduled = getNextSequence($mainPlaylist, $currentlyPlaying);
       
-      // Check if we're on the remote playlist and might transition to background
+      // Check if we're on the remote playlist and might transition to background or have more requests
       if ($currentPlaylist == $GLOBALS['remotePlaylist'] && $GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "") {
-        // Check if there are any more requests in the queue
-        $hasMoreRequests = false;
+        // Don't check queue immediately after starting a song (cooldown period)
+        $timeSinceLastQueue = time() - $GLOBALS['lastQueuedTime'];
+        if ($timeSinceLastQueue < 5) {
+          logEntry_verbose("Too soon after last interrupt (" . $timeSinceLastQueue . "s), skipping next scheduled check");
+          return;
+        }
+        
+        // Peek at the queue to see what's next (without dequeuing)
         $viewerControlMode = $GLOBALS['viewerControlMode'];
+        $nextSongName = null;
         
         if ($viewerControlMode == "voting") {
           $highestVoted = highestVotedSequence($GLOBALS['remoteToken']);
           if (isset($highestVoted->winningPlaylist) && $highestVoted->winningPlaylist != null) {
-            $hasMoreRequests = true;
+            $nextSongName = $highestVoted->winningPlaylist;
           }
         } else {
-          $nextInQueue = nextPlaylistInQueue($GLOBALS['remoteToken']);
+          $nextInQueue = peekNextPlaylistInQueue($GLOBALS['remoteToken']);
           if (isset($nextInQueue->nextPlaylist) && $nextInQueue->nextPlaylist != null) {
-            $hasMoreRequests = true;
+            $nextSongName = $nextInQueue->nextPlaylist;
           }
         }
         
-        // If no more requests, next will be background
-        if (!$hasMoreRequests) {
-          if ($nextScheduledInRF != "Background Tunes") {
-            updateNextScheduledSequenceInRf("Background Tunes", $remoteToken);
+        // If there's a next song, show it; otherwise show Background Tunes
+        $nextScheduledValue = ($nextSongName != null) ? $nextSongName : "Background Tunes";
+        if ($nextScheduledInRF != $nextScheduledValue) {
+          updateNextScheduledSequenceInRf($nextScheduledValue, $remoteToken);
+          if ($nextSongName != null) {
+            logEntry("Updated next scheduled to '" . $nextSongName . "' (next request in queue)");
+          } else {
             logEntry("Updated next scheduled to 'Background Tunes' (no more requests)");
-            $GLOBALS['nextScheduledInRF'] = "Background Tunes";
           }
-          return;
+          $GLOBALS['nextScheduledInRF'] = $nextScheduledValue;
         }
+        return;
       }
       
       if($nextScheduled != $nextScheduledInRF && $currentPlaylist != $GLOBALS['remotePlaylist']) {
@@ -959,6 +972,37 @@ function nextPlaylistInQueue($remoteToken) {
   $end_time = microtime(true);
   $execution_time = ($end_time - $start_time);
   logEntry_verbose("SUCCESS - Calling Plugins API to fetch next requested sequence. Execution time: " . $execution_time * 1000 . " ms");
+  return $decoded;
+}
+
+function peekNextPlaylistInQueue($remoteToken) {
+  $start_time = microtime(true);
+  logEntry_verbose("Calling Plugins API to peek at next requested sequence (no dequeue)");
+  $url = $GLOBALS['pluginsApiPath'] . "/nextPlaylistInQueue?updateQueue=false";
+  $options = array(
+    'http' => array(
+      'method'  => 'GET',
+      'timeout' => 10,
+      'header'=>  "remotetoken: $remoteToken\r\n"
+      )
+  );
+  $context = stream_context_create( $options );
+  $result = @file_get_contents( $url, false, $context );
+
+  if ($result === FALSE) {
+    logEntry("ERROR - Failed to peek at next playlist in queue from: " . $url);
+    return (object)['nextPlaylist' => null, 'playlistIndex' => null];
+  }
+
+  $decoded = json_decode( $result );
+  if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+    logEntry("ERROR - Invalid JSON response from peekNextPlaylistInQueue: " . json_last_error_msg());
+    return (object)['nextPlaylist' => null, 'playlistIndex' => null];
+  }
+
+  $end_time = microtime(true);
+  $execution_time = ($end_time - $start_time);
+  logEntry_verbose("SUCCESS - Peeked at next requested sequence. Execution time: " . $execution_time * 1000 . " ms");
   return $decoded;
 }
 
