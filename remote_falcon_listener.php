@@ -392,27 +392,28 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
 function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $additionalWaitTime, $remotePlaylist, $remoteToken) {
   // Check if we're in background mode and a request just arrived
   if ($GLOBALS['inBackgroundMode']) {
-    if (!isQueueEmpty($remoteToken, $viewerControlMode)) {
-      logEntry("Request detected! Switching back from background mode (interrupt)");
-      $GLOBALS['inBackgroundMode'] = false;
-      $GLOBALS['lastModeSwitch'] = time();
-      
-      if ($viewerControlMode == "voting") {
-        $highestVoted = highestVotedSequence($remoteToken);
-        if ($highestVoted->winningPlaylist != null) {
-          startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
-          $GLOBALS['lastQueuedSequence'] = "";
-          $GLOBALS['lastQueuedTime'] = time();
-          return;
-        }
-      } else {
-        $nextInQueue = nextPlaylistInQueue($remoteToken);
-        if ($nextInQueue->nextPlaylist != null) {
-          startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
-          $GLOBALS['lastQueuedSequence'] = "";
-          $GLOBALS['lastQueuedTime'] = time();
-          return;
-        }
+    // Check for requests - this will dequeue if found
+    if ($viewerControlMode == "voting") {
+      $highestVoted = highestVotedSequence($remoteToken);
+      if ($highestVoted->winningPlaylist != null) {
+        logEntry("Request detected! Switching back from background mode (interrupt) - Voting");
+        $GLOBALS['inBackgroundMode'] = false;
+        $GLOBALS['lastModeSwitch'] = time();
+        startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+        $GLOBALS['lastQueuedSequence'] = "";
+        $GLOBALS['lastQueuedTime'] = time();
+        return;
+      }
+    } else {
+      $nextInQueue = nextPlaylistInQueue($remoteToken);
+      if ($nextInQueue->nextPlaylist != null) {
+        logEntry("Request detected! Switching back from background mode (interrupt) - Jukebox");
+        $GLOBALS['inBackgroundMode'] = false;
+        $GLOBALS['lastModeSwitch'] = time();
+        startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+        $GLOBALS['lastQueuedSequence'] = "";
+        $GLOBALS['lastQueuedTime'] = time();
+        return;
       }
     }
   }
