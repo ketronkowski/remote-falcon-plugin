@@ -460,6 +460,17 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
   if($fppStatus->current_playlist != null) {
     $currentPlaylist = $fppStatus->current_playlist->playlist;
     if($currentPlaylist != $remotePlaylist) {
+      // First check if we've returned to background playlist - this takes priority
+      if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
+        // Case-insensitive, trimmed comparison
+        if (strcasecmp(trim($currentPlaylist), trim($GLOBALS['backgroundPlaylist'])) === 0) {
+          logEntry("Detected return to background playlist via breadcrumbs, setting inBackgroundMode flag");
+          $GLOBALS['inBackgroundMode'] = true;
+          $GLOBALS['lastModeSwitch'] = time();
+          return;
+        }
+      }
+      
       // Check if we recently interrupted - prevent rapid fire interrupts
       $timeSinceLastInterrupt = time() - $GLOBALS['lastQueuedTime'];
       if($timeSinceLastInterrupt < ($requestFetchTime + $additionalWaitTime + 2)) {
@@ -500,22 +511,9 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           $fppWaitTime = $requestFetchTime + $additionalWaitTime;
           logEntry("Sleeping for " . $fppWaitTime . " seconds.");
           sleep($fppWaitTime);
-        } else {
-          // No requests found - activate background mode if configured
-          if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-            // Check if we're already on the background playlist
-            if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
-              logEntry("Already on background playlist, setting inBackgroundMode flag");
-              $GLOBALS['inBackgroundMode'] = true;
-              $GLOBALS['lastModeSwitch'] = time();
-            } else {
-              logEntry("No requests in interrupt mode. Switching to background playlist mode");
-              switchToBackground($GLOBALS['backgroundPlaylist']);
-              $GLOBALS['inBackgroundMode'] = true;
-              $GLOBALS['lastModeSwitch'] = time();
-            }
-          }
         }
+        // Note: Background mode detection is handled at the top of this function (lines 463-471)
+        // to ensure it runs before the timing check
       }
       $end_time = microtime(true);
       $execution_time = ($end_time - $start_time);
