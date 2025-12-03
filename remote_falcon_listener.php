@@ -299,6 +299,8 @@ while(true) {
             startBackgroundPlaylist($GLOBALS['backgroundPlaylist']);
             $GLOBALS['inBackgroundMode'] = true;
             $GLOBALS['lastModeSwitch'] = time();
+            updateWhatsPlaying(" ", $remoteToken);
+            $GLOBALS['currentlyPlayingInRF'] = " ";
             clearNextScheduledSequence($remoteToken);
             $GLOBALS['nextScheduledInRF'] = " ";
             $rfSequencesCleared = false;
@@ -392,6 +394,8 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
               logEntry("Already on background playlist, setting inBackgroundMode flag");
               $GLOBALS['inBackgroundMode'] = true;
               $GLOBALS['lastModeSwitch'] = time();
+              updateWhatsPlaying(" ", $remoteToken);
+              $GLOBALS['currentlyPlayingInRF'] = " ";
               clearNextScheduledSequence($remoteToken);
               $GLOBALS['nextScheduledInRF'] = " ";
             }
@@ -433,6 +437,8 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
               logEntry("Already on background playlist, setting inBackgroundMode flag");
               $GLOBALS['inBackgroundMode'] = true;
               $GLOBALS['lastModeSwitch'] = time();
+              updateWhatsPlaying(" ", $remoteToken);
+              $GLOBALS['currentlyPlayingInRF'] = " ";
               clearNextScheduledSequence($remoteToken);
               $GLOBALS['nextScheduledInRF'] = " ";
             }
@@ -493,6 +499,8 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           logEntry("Detected return to background playlist via breadcrumbs, setting inBackgroundMode flag");
           $GLOBALS['inBackgroundMode'] = true;
           $GLOBALS['lastModeSwitch'] = time();
+          updateWhatsPlaying(" ", $remoteToken);
+          $GLOBALS['currentlyPlayingInRF'] = " ";
           clearNextScheduledSequence($remoteToken);
           $GLOBALS['nextScheduledInRF'] = " ";
           return;
@@ -553,6 +561,12 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
 }
 
 function updateCurrentlyPlaying($currentlyPlaying, $currentlyPlayingInRF, $remoteToken) {
+  // Don't send currently playing updates when in background mode
+  if ($GLOBALS['inBackgroundMode']) {
+    logEntry_verbose("In background mode, skipping currently playing update");
+    return;
+  }
+  
   if($currentlyPlaying != $currentlyPlayingInRF) {
     updateWhatsPlaying($currentlyPlaying, $remoteToken);
     logEntry("Updated current playing sequence to " . $currentlyPlaying);
