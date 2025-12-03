@@ -296,7 +296,7 @@ while(true) {
           // If no requests and background mode is enabled, start background playlist
           if(!$hasRequest && $GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
             logEntry("FPP idle with no requests. Starting background playlist");
-            switchToBackground($GLOBALS['backgroundPlaylist']);
+            startBackgroundPlaylist($GLOBALS['backgroundPlaylist']);
             $GLOBALS['inBackgroundMode'] = true;
             $GLOBALS['lastModeSwitch'] = time();
             $rfSequencesCleared = false;
@@ -328,7 +328,7 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         logEntry("Request detected! Switching back from background mode (non-interrupt) - Voting");
         $GLOBALS['inBackgroundMode'] = false;
         $GLOBALS['lastModeSwitch'] = time();
-        startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+        insertPlaylistImmediate(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
         $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
         $GLOBALS['lastQueuedTime'] = time();
         return;
@@ -339,7 +339,7 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         logEntry("Request detected! Switching back from background mode (non-interrupt) - Jukebox");
         $GLOBALS['inBackgroundMode'] = false;
         $GLOBALS['lastModeSwitch'] = time();
-        startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+        insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
         $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
         $GLOBALS['lastQueuedTime'] = time();
         return;
@@ -382,18 +382,15 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
       }else {
         logEntry("No votes");
         
-        // Check if background mode should be activated
+        // Check if we're already on background playlist (detect only, don't switch)
         if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-          // Check if we're already on the background playlist
-          if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
-            logEntry("Already on background playlist, setting inBackgroundMode flag");
-            $GLOBALS['inBackgroundMode'] = true;
-            $GLOBALS['lastModeSwitch'] = time();
-          } else {
-            logEntry("Switching to background playlist mode");
-            switchToBackground($GLOBALS['backgroundPlaylist']);
-            $GLOBALS['inBackgroundMode'] = true;
-            $GLOBALS['lastModeSwitch'] = time();
+          if (isset($fppStatus->current_playlist) && $fppStatus->current_playlist != null) {
+            $currentPlaylist = $fppStatus->current_playlist->playlist;
+            if (strcasecmp(trim($currentPlaylist), trim($GLOBALS['backgroundPlaylist'])) === 0) {
+              logEntry("Already on background playlist, setting inBackgroundMode flag");
+              $GLOBALS['inBackgroundMode'] = true;
+              $GLOBALS['lastModeSwitch'] = time();
+            }
           }
         }
 
@@ -424,18 +421,15 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
       }else {
         logEntry("No requests");
         
-        // Check if background mode should be activated
+        // Check if we're already on background playlist (detect only, don't switch)
         if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-          // Check if we're already on the background playlist
-          if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
-            logEntry("Already on background playlist, setting inBackgroundMode flag");
-            $GLOBALS['inBackgroundMode'] = true;
-            $GLOBALS['lastModeSwitch'] = time();
-          } else {
-            logEntry("Switching to background playlist mode");
-            switchToBackground($GLOBALS['backgroundPlaylist']);
-            $GLOBALS['inBackgroundMode'] = true;
-            $GLOBALS['lastModeSwitch'] = time();
+          if (isset($fppStatus->current_playlist) && $fppStatus->current_playlist != null) {
+            $currentPlaylist = $fppStatus->current_playlist->playlist;
+            if (strcasecmp(trim($currentPlaylist), trim($GLOBALS['backgroundPlaylist'])) === 0) {
+              logEntry("Already on background playlist, setting inBackgroundMode flag");
+              $GLOBALS['inBackgroundMode'] = true;
+              $GLOBALS['lastModeSwitch'] = time();
+            }
           }
         }
 
@@ -464,7 +458,7 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         logEntry("Request detected! Switching back from background mode (interrupt) - Voting");
         $GLOBALS['inBackgroundMode'] = false;
         $GLOBALS['lastModeSwitch'] = time();
-        startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+        insertPlaylistImmediate(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
         $GLOBALS['lastQueuedSequence'] = "";
         $GLOBALS['lastQueuedTime'] = time();
         return;
@@ -475,7 +469,7 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         logEntry("Request detected! Switching back from background mode (interrupt) - Jukebox");
         $GLOBALS['inBackgroundMode'] = false;
         $GLOBALS['lastModeSwitch'] = time();
-        startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+        insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
         $GLOBALS['lastQueuedSequence'] = "";
         $GLOBALS['lastQueuedTime'] = time();
         return;
@@ -879,56 +873,13 @@ function sendFppHeartbeat($remoteToken) {
   }
 }
 
-function isQueueEmpty
-  $nextPlaylist = nextPlaylistInQueue($remoteToken);
-  if ($nextPlaylist->nextPlaylist != null) {
-    return false;
-  }
+// Simple function to start background playlist without stopping anything
+// This avoids the "stopping gracefully" hang
+function startBackgroundPlaylist($backgroundPlaylist) {
+  logEntry("Starting background playlist: " . $backgroundPlaylist);
   
-  if ($viewerControlMode == "voting") {
-    $highestVoted = highestVotedSequence($remoteToken);
-    if ($highestVoted->winningPlaylist != null) {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-function switchToBackground($backgroundPlaylist) {
-  logEntry("Switching to background playlist: " . $backgroundPlaylist);
-  
-  // Stop current playlist gracefully
-  stopGracefully();
-  
-  // Brief wait for graceful stop to complete
-  sleep(1);
-  
-  // Fetch the current playlist configuration
+  // Start the background playlist at a random item with repeat enabled
   $bgPlaylistEncoded = rawurlencode($backgroundPlaylist);
-  $playlistDetails = getPlaylistDetails($bgPlaylistEncoded);
-  
-  if ($playlistDetails != null) {
-    // Update playlist to enable repeat
-    $playlistDetails->repeat = 1;
-    
-    // Save the updated playlist configuration
-    $url = "http://127.0.0.1/api/playlist/" . $bgPlaylistEncoded;
-    $options = array(
-      "http" => array(
-        "method"  => "POST",
-        "timeout" => 10,
-        "content" => json_encode($playlistDetails),
-        "header"  => "Content-Type: application/json\r\n"
-      )
-    );
-    $context = stream_context_create($options);
-    @file_get_contents($url, false, $context);
-    
-    logEntry_verbose("Updated background playlist to enable repeat mode");
-  }
-  
-  // Start the background playlist at a random item
   $url = "http://127.0.0.1/api/command/Start%20Playlist%20At%20Random%20Item/" . $bgPlaylistEncoded . "/true";
   
   $options = array(
@@ -946,21 +897,7 @@ function switchToBackground($backgroundPlaylist) {
     return false;
   }
   
-  logEntry("Successfully started background playlist in repeat+random mode: " . $backgroundPlaylist);
-  return true;
-}
-
-function startRfRequestNow($remotePlaylist, $index) {
-  logEntry("Starting RF request immediately from background mode");
-  
-  // Stop gracefully
-  stopGracefully();
-  
-  // Brief wait for graceful stop to complete
-  sleep(1);
-  
-  // Start the request
-  insertPlaylistImmediate($remotePlaylist, $index);
+  logEntry("Successfully started background playlist: " . $backgroundPlaylist);
   return true;
 }
 
