@@ -84,6 +84,36 @@
             <button id="syncRemotePlaylistButton" class="buttons btn-outline-success btn-rounded button-margin" type="button">Sync with RF</button>
           </div>
         </div>
+      <!-- Enable Background Mode -->
+      <div class="justify-content-md-center row setting-item">
+        <div class="col-md-6">
+          <div class="card-title h6">
+            Enable Background Mode
+          </div>
+          <div class="mb-2 text-muted card-subtitle">
+            When enabled, automatically switches to the Background Playlist when the Remote Falcon queue is empty.
+          </div>
+        </div>
+        <div class="col-md-6">
+          <input type="checkbox" class="form-control" name="enableBackgroundModeCheckbox" id="enableBackgroundModeCheckbox">
+        </div>
+      </div>
+      <!-- Background Playlist -->
+      <div class="justify-content-md-center row setting-item">
+        <div class="col-md-6">
+          <div class="card-title h6">
+            Background Playlist
+          </div>
+          <div class="mb-2 text-muted card-subtitle">
+            The playlist to play when the Remote Falcon queue is empty. Requests will automatically interrupt and resume after.
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="input-group">
+            <select class="form-control" id="backgroundPlaylistSelect" name="backgroundPlaylistSelect"></select>
+          </div>
+        </div>
+      </div>
       </div>
       <!-- Interrupt Schedule -->
       <div class="justify-content-md-center row setting-item">

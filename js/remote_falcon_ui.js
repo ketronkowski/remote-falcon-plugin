@@ -12,6 +12,8 @@ $(document).ready(async () => {
   $('#fppStatusCheckTimeInput').val(FPP_STATUS_CHECK_TIME);
   $('#pluginsApiPathInput').val(PLUGINS_API_PATH);
   $('#verboseLoggingCheckbox').prop('checked', VERBOSE_LOGGING);
+  $('#enableBackgroundModeCheckbox').prop('checked', ENABLE_BACKGROUND_MODE);
+  $('#backgroundPlaylistSelect').val(BACKGROUND_PLAYLIST);
 
   //Component Handlers
   $('#remoteTokenInput').blur(async () => {
@@ -98,6 +100,48 @@ $(document).ready(async () => {
       $.jGrowl(isChecked ? "Verbose Logging Enabled" : "Verbose Logging Disabled", { themeState: 'success' });
       await restartListener();
     });
+  });
+
+  $('#enableBackgroundModeCheckbox').change(async () => {
+    const isChecked = $('#enableBackgroundModeCheckbox').is(':checked');
+    const bgPlaylist = $('#backgroundPlaylistSelect').val();
+    
+    if (isChecked && (!bgPlaylist || bgPlaylist === '')) {
+      $.jGrowl("Please select a Background Playlist first", { themeState: 'warning' });
+      $('#enableBackgroundModeCheckbox').prop('checked', false);
+      return;
+    }
+    
+    await FPPPost('/api/plugin/remote-falcon/settings/enableBackgroundMode', isChecked.toString(), async () => {
+      await getPluginConfig();
+      $.jGrowl(isChecked ? "Background Mode Enabled" : "Background Mode Disabled", { themeState: 'success' });
+      await restartListener();
+    });
+  });
+
+  $('#backgroundPlaylistSelect').change(async () => {
+    const selectedPlaylist = $('#backgroundPlaylistSelect').val();
+    const enableBackgroundMode = $('#enableBackgroundModeCheckbox').is(':checked');
+    
+    if (enableBackgroundMode && (!selectedPlaylist || selectedPlaylist === '')) {
+      $.jGrowl("Background Playlist cannot be empty when Background Mode is enabled", { themeState: 'warning' });
+      await FPPPost('/api/plugin/remote-falcon/settings/enableBackgroundMode', 'false', async () => {
+        await getPluginConfig();
+        $('#enableBackgroundModeCheckbox').prop('checked', false);
+        $.jGrowl("Background Mode Disabled", { themeState: 'warning' });
+      });
+      return;
+    }
+    
+    if (selectedPlaylist) {
+      await FPPPost('/api/plugin/remote-falcon/settings/backgroundPlaylist', encodeURIComponent(selectedPlaylist), async () => {
+        await getPluginConfig();
+        $.jGrowl("Background Playlist Updated", { themeState: 'success' });
+        if (enableBackgroundMode) {
+          await restartListener();
+        }
+      });
+    }
   });
 
   $('#stopListenerButton').click(async () => {

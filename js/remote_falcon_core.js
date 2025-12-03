@@ -77,6 +77,12 @@ async function getPluginConfig() {
   await FPPGet('/api/plugin/remote-falcon/settings/verboseLogging', (data) => {
     VERBOSE_LOGGING = data?.verboseLogging == 'true';
   });
+  await FPPGet('/api/plugin/remote-falcon/settings/enableBackgroundMode', (data) => {
+    ENABLE_BACKGROUND_MODE = data?.enableBackgroundMode == 'true';
+  });
+  await FPPGet('/api/plugin/remote-falcon/settings/backgroundPlaylist', (data) => {
+    BACKGROUND_PLAYLIST = decodeURIComponent(data?.backgroundPlaylist || '');
+  });
   // await FPPGet('/api/plugin/remote-falcon/settings/remotePlaylist', (data) => {
   //   REMOTE_PLAYLIST = data?.remotePlaylist;
   // });
@@ -109,14 +115,24 @@ async function checkPluginUpdates() {
 async function getPlaylists() {
   await FPPGet('/api/playlists', (data) => {
     var playlistOptions = '';
+    var bgPlaylistOptions = '<option value="">-- None --</option>';
+    
     data.forEach(playlist => {
       if(playlist === REMOTE_PLAYLIST) {
         playlistOptions += '<option selected value="' + playlist + '">' + playlist + '</option>';
       }else {
         playlistOptions += '<option value="' + playlist + '">' + playlist + '</option>';
       }
+      
+      // Add to background playlist options, selecting if it matches BACKGROUND_PLAYLIST
+      if(playlist === BACKGROUND_PLAYLIST) {
+        bgPlaylistOptions += '<option selected value="' + playlist + '">' + playlist + '</option>';
+      }else {
+        bgPlaylistOptions += '<option value="' + playlist + '">' + playlist + '</option>';
+      }
     });
     $('#remotePlaylistSelect').html(playlistOptions);
+    $('#backgroundPlaylistSelect').html(bgPlaylistOptions);
   })
 }
 
