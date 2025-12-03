@@ -144,8 +144,10 @@ $GLOBALS['verboseLogging'] = $verboseLogging == "true" ? true : false;
 // Load background mode settings
 $enableBackgroundMode = urldecode($pluginSettings['enableBackgroundMode']);
 $enableBackgroundMode = $enableBackgroundMode == "true" ? true : false;
+$GLOBALS['enableBackgroundMode'] = $enableBackgroundMode;
 logEntry("Enable Background Mode: " . ($enableBackgroundMode ? "true" : "false"));
 $backgroundPlaylist = urldecode($pluginSettings['backgroundPlaylist']);
+$GLOBALS['backgroundPlaylist'] = $backgroundPlaylist;
 if ($backgroundPlaylist != "") {
   logEntry("Background Playlist: " . $backgroundPlaylist);
 }
@@ -356,10 +358,17 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         
         // Check if background mode should be activated
         if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-          logEntry("Switching to background playlist mode");
-          switchToBackground($GLOBALS['backgroundPlaylist']);
-          $GLOBALS['inBackgroundMode'] = true;
-          $GLOBALS['lastModeSwitch'] = time();
+          // Check if we're already on the background playlist
+          if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
+            logEntry("Already on background playlist, setting inBackgroundMode flag");
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+          } else {
+            logEntry("Switching to background playlist mode");
+            switchToBackground($GLOBALS['backgroundPlaylist']);
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+          }
         }
 
         // Track that we've checked (even with no result) to prevent re-checking
@@ -391,10 +400,17 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         
         // Check if background mode should be activated
         if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-          logEntry("Switching to background playlist mode");
-          switchToBackground($GLOBALS['backgroundPlaylist']);
-          $GLOBALS['inBackgroundMode'] = true;
-          $GLOBALS['lastModeSwitch'] = time();
+          // Check if we're already on the background playlist
+          if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
+            logEntry("Already on background playlist, setting inBackgroundMode flag");
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+          } else {
+            logEntry("Switching to background playlist mode");
+            switchToBackground($GLOBALS['backgroundPlaylist']);
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+          }
         }
 
         // Track that we've checked (even with no result) to prevent re-checking
@@ -487,10 +503,17 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         } else {
           // No requests found - activate background mode if configured
           if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
-            logEntry("No requests in interrupt mode. Switching to background playlist mode");
-            switchToBackground($GLOBALS['backgroundPlaylist']);
-            $GLOBALS['inBackgroundMode'] = true;
-            $GLOBALS['lastModeSwitch'] = time();
+            // Check if we're already on the background playlist
+            if ($currentPlaylist == $GLOBALS['backgroundPlaylist']) {
+              logEntry("Already on background playlist, setting inBackgroundMode flag");
+              $GLOBALS['inBackgroundMode'] = true;
+              $GLOBALS['lastModeSwitch'] = time();
+            } else {
+              logEntry("No requests in interrupt mode. Switching to background playlist mode");
+              switchToBackground($GLOBALS['backgroundPlaylist']);
+              $GLOBALS['inBackgroundMode'] = true;
+              $GLOBALS['lastModeSwitch'] = time();
+            }
           }
         }
       }
