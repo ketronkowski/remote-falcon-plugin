@@ -1,12 +1,48 @@
 <?php
 $PLUGIN_VERSION = "2025.10.12.2";
 
-include_once "/opt/fpp/www/common.php";
+// IMMEDIATE STARTUP LOGGING - Before anything else
+$myPid = getmypid();
+$logFile = '/home/fpp/media/logs/remote-falcon-listener.log';
+$startupMsg = "[" . date('Y-m-d H:i:s') . "] SCRIPT STARTUP - PID: {$myPid} - Version: {$PLUGIN_VERSION}\n";
+error_log("RemoteFalcon[{$myPid}]: SCRIPT STARTUP - Version: {$PLUGIN_VERSION}");
+@file_put_contents($logFile, $startupMsg, FILE_APPEND | LOCK_EX);
+
+// CLI-friendly setup without common.php HTML output
 $pluginName = basename(dirname(__FILE__));
-$pluginPath = $settings['pluginDirectory']."/".$pluginName."/"; 
-$logFile = $settings['logDirectory']."/".$pluginName."-listener.log";
+$settings = array(
+  'pluginDirectory' => '/home/fpp/media/plugins',
+  'logDirectory' => '/home/fpp/media/logs',
+  'configDirectory' => '/home/fpp/media/config'
+);
+$pluginPath = $settings['pluginDirectory']."/".$pluginName."/";
+
 $pluginConfigFile = $settings['configDirectory'] . "/plugin." .$pluginName;
 $pluginSettings = parse_ini_file($pluginConfigFile);
+
+// Define WriteSettingToFile function for CLI use
+function WriteSettingToFile($setting, $value, $plugin = "") {
+  global $settings;
+  $cfgFile = $settings['configDirectory'] . "/plugin." . $plugin;
+  if (file_exists($cfgFile)) {
+    $contents = file_get_contents($cfgFile);
+  } else {
+    $contents = "";
+  }
+  $lines = explode("\n", $contents);
+  $found = false;
+  for ($i = 0; $i < count($lines); $i++) {
+    if (strpos($lines[$i], $setting . " =") === 0) {
+      $lines[$i] = $setting . " = \"" . $value . "\"";
+      $found = true;
+      break;
+    }
+  }
+  if (!$found) {
+    $lines[] = $setting . " = \"" . $value . "\"";
+  }
+  file_put_contents($cfgFile, implode("\n", $lines));
+}
 
 WriteSettingToFile("pluginVersion",urlencode($PLUGIN_VERSION),$pluginName);
 
@@ -41,6 +77,12 @@ if (strlen(urldecode($pluginSettings['remoteFalconListenerEnabled']))<1){
 if (strlen(urldecode($pluginSettings['remoteFalconListenerRestarting']))<1){
   WriteSettingToFile("remoteFalconListenerRestarting",urlencode("false"),$pluginName);
 }
+if (strlen(urldecode($pluginSettings['enableBackgroundMode']))<1){
+  WriteSettingToFile("enableBackgroundMode",urlencode("false"),$pluginName);
+}
+if (strlen(urldecode($pluginSettings['backgroundPlaylist']))<1){
+  WriteSettingToFile("backgroundPlaylist",urlencode(""),$pluginName);
+}
 
 logEntry("Starting Remote Falcon Plugin v" . $PLUGIN_VERSION);
 
@@ -57,6 +99,13 @@ $pluginsApiPath = "";
 $verboseLogging = false;
 $lastQueuedSequence = "";
 $lastQueuedTime = 0;
+
+// Background mode tracking
+$inBackgroundMode = false;
+$lastModeSwitch = 0;
+$enableBackgroundMode = false;
+$backgroundPlaylist = "";
+
 
 // Heartbeat tracking
 $lastHeartbeatTime = 0;
@@ -91,6 +140,15 @@ logEntry("FPP Status Check Time: " . $fppStatusCheckTime . " (" . $fppStatusChec
 $verboseLogging = urldecode($pluginSettings['verboseLogging']);
 logEntry("Verbose Logging: " . $verboseLogging);
 $GLOBALS['verboseLogging'] = $verboseLogging == "true" ? true : false;
+
+// Load background mode settings
+$enableBackgroundMode = urldecode($pluginSettings['enableBackgroundMode']);
+$enableBackgroundMode = $enableBackgroundMode == "true" ? true : false;
+logEntry("Enable Background Mode: " . ($enableBackgroundMode ? "true" : "false"));
+$backgroundPlaylist = urldecode($pluginSettings['backgroundPlaylist']);
+if ($backgroundPlaylist != "") {
+  logEntry("Background Playlist: " . $backgroundPlaylist);
+}
 
 while(true) {
   $pluginSettings = parse_ini_file($pluginConfigFile);
@@ -164,10 +222,34 @@ while(true) {
           doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $additionalWaitTime, $remotePlaylist, $remoteToken);
         }
       }else {
+        // FPP is idle - check for new requests to start
         if($rfSequencesCleared == 0) {
           updateCurrentlyPlaying(" ", $GLOBALS['currentlyPlayingInRF'], $remoteToken);
           clearNextScheduledSequence($remoteToken);
           $rfSequencesCleared = true;
+        }
+        
+        // If in interrupt mode and idle, check for new requests
+        if($interruptSchedule == 1) {
+          if($viewerControlMode == "voting") {
+            $highestVotedSequence = highestVotedSequence($remoteToken);
+            $winningSequence = $highestVotedSequence->winningPlaylist;
+            $winningSequenceIndex = $highestVotedSequence->playlistIndex;
+            if($winningSequence != null) {
+              logEntry("Playing winning sequence " . $winningSequence . " at index " . $winningSequenceIndex . " from idle");
+              insertPlaylistImmediate(rawurlencode($remotePlaylist), $winningSequenceIndex);
+              $rfSequencesCleared = false;
+            }
+          }else {
+            $nextPlaylistInQueue = nextPlaylistInQueue($remoteToken);
+            $nextSequence = $nextPlaylistInQueue->nextPlaylist;
+            $nextSequenceIndex = $nextPlaylistInQueue->playlistIndex;
+            if($nextSequence != null) {
+              logEntry("Playing requested sequence " . $nextSequence . " at index " . $nextSequenceIndex . " from idle");
+              insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextSequenceIndex);
+              $rfSequencesCleared = false;
+            }
+          }
         }
       }
     }else {
@@ -184,6 +266,36 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
   $currentlyPlaying = pathinfo($fppStatus->current_sequence, PATHINFO_FILENAME);
   if($currentlyPlaying == "") {
     $currentlyPlaying = pathinfo($fppStatus->current_song, PATHINFO_FILENAME);
+  }
+
+  // Check if we're in background mode and a request just arrived
+    if ($GLOBALS['inBackgroundMode']) {
+    if (!isQueueEmpty($remoteToken, $viewerControlMode)) {
+      logEntry("Request detected! Switching back from background mode");
+      $GLOBALS['inBackgroundMode'] = false;
+      $GLOBALS['lastModeSwitch'] = time();
+      
+      if ($viewerControlMode == "voting") {
+        $highestVoted = highestVotedSequence($remoteToken);
+        if ($highestVoted->winningPlaylist != null) {
+          startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+          $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
+          $GLOBALS['lastQueuedTime'] = time();
+          return;
+        }
+      } else {
+        $nextInQueue = nextPlaylistInQueue($remoteToken);
+        if ($nextInQueue->nextPlaylist != null) {
+          startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+          $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
+          $GLOBALS['lastQueuedTime'] = time();
+          return;
+        }
+      }
+    } else {
+      logEntry_verbose("Still in background mode, no requests yet");
+      return;
+    }
   }
 
   // Check if we've already queued a sequence for the current playing sequence
@@ -218,6 +330,14 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         sleep($fppWaitTime);
       }else {
         logEntry("No votes");
+        
+        // Check if background mode should be activated
+        if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
+          logEntry("Switching to background playlist mode");
+          switchToBackground($GLOBALS['backgroundPlaylist']);
+          $GLOBALS['inBackgroundMode'] = true;
+          $GLOBALS['lastModeSwitch'] = time();
+        }
 
         // Track that we've checked (even with no result) to prevent re-checking
         $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
@@ -245,6 +365,14 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
         sleep($fppWaitTime);
       }else {
         logEntry("No requests");
+        
+        // Check if background mode should be activated
+        if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
+          logEntry("Switching to background playlist mode");
+          switchToBackground($GLOBALS['backgroundPlaylist']);
+          $GLOBALS['inBackgroundMode'] = true;
+          $GLOBALS['lastModeSwitch'] = time();
+        }
 
         // Track that we've checked (even with no result) to prevent re-checking
         $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
@@ -262,9 +390,36 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
 }
 
 function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $additionalWaitTime, $remotePlaylist, $remoteToken) {
+  // Check if we're in background mode and a request just arrived
+  if ($GLOBALS['inBackgroundMode']) {
+    if (!isQueueEmpty($remoteToken, $viewerControlMode)) {
+      logEntry("Request detected! Switching back from background mode (interrupt)");
+      $GLOBALS['inBackgroundMode'] = false;
+      $GLOBALS['lastModeSwitch'] = time();
+      
+      if ($viewerControlMode == "voting") {
+        $highestVoted = highestVotedSequence($remoteToken);
+        if ($highestVoted->winningPlaylist != null) {
+          startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+          $GLOBALS['lastQueuedSequence'] = "";
+          $GLOBALS['lastQueuedTime'] = time();
+          return;
+        }
+      } else {
+        $nextInQueue = nextPlaylistInQueue($remoteToken);
+        if ($nextInQueue->nextPlaylist != null) {
+          startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+          $GLOBALS['lastQueuedSequence'] = "";
+          $GLOBALS['lastQueuedTime'] = time();
+          return;
+        }
+      }
+    }
+  }
+  
   if($fppStatus->current_playlist != null) {
     $currentPlaylist = $fppStatus->current_playlist->playlist;
-    if($currentPlaylist != $GLOBALS['remotePlaylist']) {
+    if($currentPlaylist != $remotePlaylist) {
       // Check if we recently interrupted - prevent rapid fire interrupts
       $timeSinceLastInterrupt = time() - $GLOBALS['lastQueuedTime'];
       if($timeSinceLastInterrupt < ($requestFetchTime + $additionalWaitTime + 2)) {
@@ -645,27 +800,116 @@ function sendFppHeartbeat($remoteToken) {
   }
 }
 
+// Standalone logging system - no FPP dependencies
 function logEntry($data) {
-
-	global $logFile,$myPid;
-
-	$data = $_SERVER['PHP_SELF']." : [".$myPid."] ".$data;
+	global $logFile, $myPid;
 	
-	$logWrite= fopen($logFile, "a") or die("Unable to open file!");
-	fwrite($logWrite, date('Y-m-d h:i:s A',time()).": ".$data."\n");
-	fclose($logWrite);
+	// Triple-redundant logging approach
+	$timestamp = date('Y-m-d H:i:s');
+	$message = "[{$timestamp}] [PID:{$myPid}] {$data}\n";
+	
+	// Method 1: error_log to syslog
+	error_log("RemoteFalcon[{$myPid}]: {$data}");
+	
+	// Method 2: Direct file write with error suppression
+	@file_put_contents($logFile, $message, FILE_APPEND | LOCK_EX);
+	
+	// Method 3: Fallback to stderr
+	if (defined('STDERR')) {
+		@fwrite(STDERR, $message);
+	}
 }
 
 function logEntry_verbose($data) {
-  if($GLOBALS['verboseLogging'] == 1) {
-    global $logFile,$myPid;
-  
-    $data = $_SERVER['PHP_SELF']." : [".$myPid."] ".$data;
-    
-    $logWrite= fopen($logFile, "a") or die("Unable to open file!");
-    fwrite($logWrite, date('Y-m-d h:i:s A',time()).": ".$data."\n");
-    fclose($logWrite);
+	if ($GLOBALS['verboseLogging'] == 1) {
+		logEntry("[VERBOSE] " . $data);
+	}
+}
+
+
+function isQueueEmpty($remoteToken, $viewerControlMode) {
+  $nextPlaylist = nextPlaylistInQueue($remoteToken);
+  if ($nextPlaylist->nextPlaylist != null) {
+    return false;
   }
+  
+  if ($viewerControlMode == "voting") {
+    $highestVoted = highestVotedSequence($remoteToken);
+    if ($highestVoted->winningPlaylist != null) {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+function switchToBackground($backgroundPlaylist) {
+  logEntry("Switching to background playlist: " . $backgroundPlaylist);
+  
+  // Stop current playlist gracefully
+  stopGracefully();
+  
+  // Brief wait for graceful stop to complete
+  sleep(1);
+  
+  // Fetch the current playlist configuration
+  $bgPlaylistEncoded = rawurlencode($backgroundPlaylist);
+  $playlistDetails = getPlaylistDetails($bgPlaylistEncoded);
+  
+  if ($playlistDetails != null) {
+    // Update playlist to enable repeat
+    $playlistDetails->repeat = 1;
+    
+    // Save the updated playlist configuration
+    $url = "http://127.0.0.1/api/playlist/" . $bgPlaylistEncoded;
+    $options = array(
+      "http" => array(
+        "method"  => "POST",
+        "timeout" => 10,
+        "content" => json_encode($playlistDetails),
+        "header"  => "Content-Type: application/json\r\n"
+      )
+    );
+    $context = stream_context_create($options);
+    @file_get_contents($url, false, $context);
+    
+    logEntry_verbose("Updated background playlist to enable repeat mode");
+  }
+  
+  // Start the background playlist at a random item
+  $url = "http://127.0.0.1/api/command/Start%20Playlist%20At%20Random%20Item/" . $bgPlaylistEncoded . "/true";
+  
+  $options = array(
+    "http" => array(
+      "method"  => "GET",
+      "timeout" => 10
+    )
+  );
+  
+  $context = stream_context_create($options);
+  $result = @file_get_contents($url, false, $context);
+  
+  if ($result === FALSE) {
+    logEntry("ERROR - Failed to start background playlist: " . rawurldecode($bgPlaylistEncoded));
+    return false;
+  }
+  
+  logEntry("Successfully started background playlist in repeat+random mode: " . $backgroundPlaylist);
+  return true;
+}
+
+function startRfRequestNow($remotePlaylist, $index) {
+  logEntry("Starting RF request immediately from background mode");
+  
+  // Stop gracefully
+  stopGracefully();
+  
+  // Brief wait for graceful stop to complete
+  sleep(1);
+  
+  // Start the request
+  insertPlaylistImmediate($remotePlaylist, $index);
+  return true;
 }
 
 ?>
