@@ -199,6 +199,17 @@ while(true) {
     $verboseLogging = urldecode($pluginSettings['verboseLogging']);
     logEntry("Verbose Logging: " . $verboseLogging);
     $GLOBALS['verboseLogging'] = $verboseLogging == "true" ? true : false;
+    
+    // Reload background mode settings
+    $enableBackgroundMode = urldecode($pluginSettings['enableBackgroundMode']);
+    $enableBackgroundMode = $enableBackgroundMode == "true" ? true : false;
+    $GLOBALS['enableBackgroundMode'] = $enableBackgroundMode;
+    logEntry("Enable Background Mode: " . ($enableBackgroundMode ? "true" : "false"));
+    $backgroundPlaylist = urldecode($pluginSettings['backgroundPlaylist']);
+    $GLOBALS['backgroundPlaylist'] = $backgroundPlaylist;
+    if ($backgroundPlaylist != "") {
+      logEntry("Background Playlist: " . $backgroundPlaylist);
+    }
   }
 
   if($remoteFppEnabled == 1) {
@@ -231,6 +242,7 @@ while(true) {
         
         // If in interrupt mode and idle, check for new requests
         if($interruptSchedule == 1) {
+          $hasRequest = false;
           if($viewerControlMode == "voting") {
             $highestVotedSequence = highestVotedSequence($remoteToken);
             $winningSequence = $highestVotedSequence->winningPlaylist;
@@ -239,6 +251,7 @@ while(true) {
               logEntry("Playing winning sequence " . $winningSequence . " at index " . $winningSequenceIndex . " from idle");
               insertPlaylistImmediate(rawurlencode($remotePlaylist), $winningSequenceIndex);
               $rfSequencesCleared = false;
+              $hasRequest = true;
             }
           }else {
             $nextPlaylistInQueue = nextPlaylistInQueue($remoteToken);
@@ -248,7 +261,17 @@ while(true) {
               logEntry("Playing requested sequence " . $nextSequence . " at index " . $nextSequenceIndex . " from idle");
               insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextSequenceIndex);
               $rfSequencesCleared = false;
+              $hasRequest = true;
             }
+          }
+          
+          // If no requests and background mode is enabled, start background playlist
+          if(!$hasRequest && $GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
+            logEntry("FPP idle with no requests. Starting background playlist");
+            switchToBackground($GLOBALS['backgroundPlaylist']);
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+            $rfSequencesCleared = false;
           }
         }
       }
@@ -269,33 +292,33 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
   }
 
   // Check if we're in background mode and a request just arrived
-    if ($GLOBALS['inBackgroundMode']) {
-    if (!isQueueEmpty($remoteToken, $viewerControlMode)) {
-      logEntry("Request detected! Switching back from background mode");
-      $GLOBALS['inBackgroundMode'] = false;
-      $GLOBALS['lastModeSwitch'] = time();
-      
-      if ($viewerControlMode == "voting") {
-        $highestVoted = highestVotedSequence($remoteToken);
-        if ($highestVoted->winningPlaylist != null) {
-          startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
-          $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
-          $GLOBALS['lastQueuedTime'] = time();
-          return;
-        }
-      } else {
-        $nextInQueue = nextPlaylistInQueue($remoteToken);
-        if ($nextInQueue->nextPlaylist != null) {
-          startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
-          $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
-          $GLOBALS['lastQueuedTime'] = time();
-          return;
-        }
+  if ($GLOBALS['inBackgroundMode']) {
+    // Check for requests directly - don't use isQueueEmpty() to avoid double dequeue
+    if ($viewerControlMode == "voting") {
+      $highestVoted = highestVotedSequence($remoteToken);
+      if ($highestVoted->winningPlaylist != null) {
+        logEntry("Request detected! Switching back from background mode (non-interrupt) - Voting");
+        $GLOBALS['inBackgroundMode'] = false;
+        $GLOBALS['lastModeSwitch'] = time();
+        startRfRequestNow(rawurlencode($remotePlaylist), $highestVoted->playlistIndex);
+        $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
+        $GLOBALS['lastQueuedTime'] = time();
+        return;
       }
     } else {
-      logEntry_verbose("Still in background mode, no requests yet");
-      return;
+      $nextInQueue = nextPlaylistInQueue($remoteToken);
+      if ($nextInQueue->nextPlaylist != null) {
+        logEntry("Request detected! Switching back from background mode (non-interrupt) - Jukebox");
+        $GLOBALS['inBackgroundMode'] = false;
+        $GLOBALS['lastModeSwitch'] = time();
+        startRfRequestNow(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
+        $GLOBALS['lastQueuedSequence'] = $currentlyPlaying;
+        $GLOBALS['lastQueuedTime'] = time();
+        return;
+      }
     }
+    logEntry_verbose("Still in background mode, no requests yet");
+    return;
   }
 
   // Check if we've already queued a sequence for the current playing sequence
