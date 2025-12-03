@@ -166,6 +166,8 @@ logEntry("FPP Status Check Time: " . $fppStatusCheckTime . " (" . $fppStatusChec
 $verboseLogging = urldecode($pluginSettings['verboseLogging']);
 logEntry("Verbose Logging: " . $verboseLogging);
 $GLOBALS['verboseLogging'] = $verboseLogging == "true" ? true : false;
+$GLOBALS['viewerControlMode'] = $viewerControlMode;
+$GLOBALS['remoteToken'] = $remoteToken;
 
 // Load background mode settings
 $enableBackgroundMode = urldecode($pluginSettings['enableBackgroundMode']);
@@ -176,6 +178,22 @@ $backgroundPlaylist = urldecode($pluginSettings['backgroundPlaylist']);
 $GLOBALS['backgroundPlaylist'] = $backgroundPlaylist;
 if ($backgroundPlaylist != "") {
   logEntry("Background Playlist: " . $backgroundPlaylist);
+}
+
+// Detect if we're already playing the background playlist on startup
+if ($enableBackgroundMode && $backgroundPlaylist != "") {
+  $fppStatus = getFppStatus();
+  if ($fppStatus != null && $fppStatus != false) {
+    $currentPlaylist = isset($fppStatus->current_playlist) ? $fppStatus->current_playlist->playlist : "";
+    if (strcasecmp($currentPlaylist, $backgroundPlaylist) == 0) {
+      logEntry("Startup detection: Already playing background playlist '" . $backgroundPlaylist . "'. Setting inBackgroundMode=true");
+      $GLOBALS['inBackgroundMode'] = true;
+      $GLOBALS['lastModeSwitch'] = time();
+      // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
+      $GLOBALS['currentlyPlayingInRF'] = "";
+      $GLOBALS['nextScheduledInRF'] = "";
+    }
+  }
 }
 
 while(true) {
@@ -227,6 +245,8 @@ while(true) {
     $verboseLogging = urldecode($pluginSettings['verboseLogging']);
     logEntry("Verbose Logging: " . $verboseLogging);
     $GLOBALS['verboseLogging'] = $verboseLogging == "true" ? true : false;
+    $GLOBALS['viewerControlMode'] = $viewerControlMode;
+    $GLOBALS['remoteToken'] = $remoteToken;
     
     // Reload background mode settings
     $enableBackgroundMode = urldecode($pluginSettings['enableBackgroundMode']);
@@ -237,6 +257,22 @@ while(true) {
     $GLOBALS['backgroundPlaylist'] = $backgroundPlaylist;
     if ($backgroundPlaylist != "") {
       logEntry("Background Playlist: " . $backgroundPlaylist);
+    }
+    
+    // Detect if we're already playing the background playlist after restart
+    if ($enableBackgroundMode && $backgroundPlaylist != "") {
+      $fppStatus = getFppStatus();
+      if ($fppStatus != null && $fppStatus != false) {
+        $currentPlaylist = isset($fppStatus->current_playlist) ? $fppStatus->current_playlist->playlist : "";
+        if (strcasecmp($currentPlaylist, $backgroundPlaylist) == 0) {
+          logEntry("Restart detection: Already playing background playlist '" . $backgroundPlaylist . "'. Setting inBackgroundMode=true");
+          $GLOBALS['inBackgroundMode'] = true;
+          $GLOBALS['lastModeSwitch'] = time();
+          // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
+          $GLOBALS['currentlyPlayingInRF'] = "";
+          $GLOBALS['nextScheduledInRF'] = "";
+        }
+      }
     }
   }
 
@@ -299,10 +335,9 @@ while(true) {
             startBackgroundPlaylist($GLOBALS['backgroundPlaylist']);
             $GLOBALS['inBackgroundMode'] = true;
             $GLOBALS['lastModeSwitch'] = time();
-            updateWhatsPlaying(" ", $remoteToken);
-            $GLOBALS['currentlyPlayingInRF'] = " ";
-            clearNextScheduledSequence($remoteToken);
-            $GLOBALS['nextScheduledInRF'] = " ";
+            // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
+            $GLOBALS['currentlyPlayingInRF'] = "";
+            $GLOBALS['nextScheduledInRF'] = "";
             $rfSequencesCleared = false;
           }
         }
@@ -437,10 +472,9 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
               logEntry("Already on background playlist, setting inBackgroundMode flag");
               $GLOBALS['inBackgroundMode'] = true;
               $GLOBALS['lastModeSwitch'] = time();
-              updateWhatsPlaying(" ", $remoteToken);
-              $GLOBALS['currentlyPlayingInRF'] = " ";
-              clearNextScheduledSequence($remoteToken);
-              $GLOBALS['nextScheduledInRF'] = " ";
+              // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
+              $GLOBALS['currentlyPlayingInRF'] = "";
+              $GLOBALS['nextScheduledInRF'] = "";
             }
           }
         }
@@ -499,10 +533,9 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           logEntry("Detected return to background playlist via breadcrumbs, setting inBackgroundMode flag");
           $GLOBALS['inBackgroundMode'] = true;
           $GLOBALS['lastModeSwitch'] = time();
-          updateWhatsPlaying(" ", $remoteToken);
-          $GLOBALS['currentlyPlayingInRF'] = " ";
-          clearNextScheduledSequence($remoteToken);
-          $GLOBALS['nextScheduledInRF'] = " ";
+          // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
+          $GLOBALS['currentlyPlayingInRF'] = "";
+          $GLOBALS['nextScheduledInRF'] = "";
           return;
         }
       }
@@ -561,9 +594,13 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
 }
 
 function updateCurrentlyPlaying($currentlyPlaying, $currentlyPlayingInRF, $remoteToken) {
-  // Don't send currently playing updates when in background mode
+  // When in background mode, send "Background Tunes" instead of skipping
   if ($GLOBALS['inBackgroundMode']) {
-    logEntry_verbose("In background mode, skipping currently playing update");
+    if ($currentlyPlayingInRF != "Background Tunes") {
+      updateWhatsPlaying("Background Tunes", $remoteToken);
+      logEntry("Updated current playing to 'Background Tunes'");
+      $GLOBALS['currentlyPlayingInRF'] = "Background Tunes";
+    }
     return;
   }
   
@@ -575,9 +612,13 @@ function updateCurrentlyPlaying($currentlyPlaying, $currentlyPlayingInRF, $remot
 }
 
 function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextScheduledInRF, $remoteToken) {
-  // Don't send next scheduled updates when in background mode
+  // When in background mode, clear next scheduled (empty string)
   if ($GLOBALS['inBackgroundMode']) {
-    logEntry_verbose("In background mode, skipping next scheduled sequence update");
+    if ($nextScheduledInRF != "" && $nextScheduledInRF != " ") {
+      clearNextScheduledSequence($remoteToken);
+      $GLOBALS['nextScheduledInRF'] = " ";
+      logEntry("Cleared next scheduled sequence (in background mode)");
+    }
     return;
   }
   
@@ -594,11 +635,10 @@ function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextSchedul
 
   $currentPlaylist = $fppStatus->current_playlist->playlist;
   
-  // Check if current playlist is the background playlist - if so, don't update next scheduled
+  // Check if current playlist is the background playlist - if so, clear next scheduled
   if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "") {
     if (strcasecmp(trim($currentPlaylist), trim($GLOBALS['backgroundPlaylist'])) === 0) {
-      logEntry_verbose("Current playlist is background, skipping next scheduled sequence update");
-      // Clear next scheduled if it's not already empty
+      logEntry_verbose("Current playlist is background, clearing next scheduled sequence");
       if ($nextScheduledInRF != "" && $nextScheduledInRF != " ") {
         clearNextScheduledSequence($remoteToken);
         $GLOBALS['nextScheduledInRF'] = " ";
@@ -614,6 +654,36 @@ function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextSchedul
     $mainPlaylist = $playlistDetails->mainPlaylist;
     if($mainPlaylist != null && $mainPlaylist != "" && count($mainPlaylist) > 0) {
       $nextScheduled = getNextSequence($mainPlaylist, $currentlyPlaying);
+      
+      // Check if we're on the remote playlist and might transition to background
+      if ($currentPlaylist == $GLOBALS['remotePlaylist'] && $GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "") {
+        // Check if there are any more requests in the queue
+        $hasMoreRequests = false;
+        $viewerControlMode = $GLOBALS['viewerControlMode'];
+        
+        if ($viewerControlMode == "voting") {
+          $highestVoted = highestVotedSequence($GLOBALS['remoteToken']);
+          if (isset($highestVoted->winningPlaylist) && $highestVoted->winningPlaylist != null) {
+            $hasMoreRequests = true;
+          }
+        } else {
+          $nextInQueue = nextPlaylistInQueue($GLOBALS['remoteToken']);
+          if (isset($nextInQueue->nextPlaylist) && $nextInQueue->nextPlaylist != null) {
+            $hasMoreRequests = true;
+          }
+        }
+        
+        // If no more requests, next will be background
+        if (!$hasMoreRequests) {
+          if ($nextScheduledInRF != "Background Tunes") {
+            updateNextScheduledSequenceInRf("Background Tunes", $remoteToken);
+            logEntry("Updated next scheduled to 'Background Tunes' (no more requests)");
+            $GLOBALS['nextScheduledInRF'] = "Background Tunes";
+          }
+          return;
+        }
+      }
+      
       if($nextScheduled != $nextScheduledInRF && $currentPlaylist != $GLOBALS['remotePlaylist']) {
         updateNextScheduledSequenceInRf($nextScheduled, $remoteToken);
         logEntry("Updated next scheduled sequence to " . $nextScheduled);
