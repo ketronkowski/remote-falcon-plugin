@@ -299,6 +299,8 @@ while(true) {
             startBackgroundPlaylist($GLOBALS['backgroundPlaylist']);
             $GLOBALS['inBackgroundMode'] = true;
             $GLOBALS['lastModeSwitch'] = time();
+            clearNextScheduledSequence($remoteToken);
+            $GLOBALS['nextScheduledInRF'] = " ";
             $rfSequencesCleared = false;
           }
         }
@@ -390,6 +392,8 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
               logEntry("Already on background playlist, setting inBackgroundMode flag");
               $GLOBALS['inBackgroundMode'] = true;
               $GLOBALS['lastModeSwitch'] = time();
+              clearNextScheduledSequence($remoteToken);
+              $GLOBALS['nextScheduledInRF'] = " ";
             }
           }
         }
@@ -429,6 +433,8 @@ function doNonInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, 
               logEntry("Already on background playlist, setting inBackgroundMode flag");
               $GLOBALS['inBackgroundMode'] = true;
               $GLOBALS['lastModeSwitch'] = time();
+              clearNextScheduledSequence($remoteToken);
+              $GLOBALS['nextScheduledInRF'] = " ";
             }
           }
         }
@@ -487,6 +493,8 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           logEntry("Detected return to background playlist via breadcrumbs, setting inBackgroundMode flag");
           $GLOBALS['inBackgroundMode'] = true;
           $GLOBALS['lastModeSwitch'] = time();
+          clearNextScheduledSequence($remoteToken);
+          $GLOBALS['nextScheduledInRF'] = " ";
           return;
         }
       }
@@ -553,6 +561,12 @@ function updateCurrentlyPlaying($currentlyPlaying, $currentlyPlayingInRF, $remot
 }
 
 function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextScheduledInRF, $remoteToken) {
+  // Don't send next scheduled updates when in background mode
+  if ($GLOBALS['inBackgroundMode']) {
+    logEntry_verbose("In background mode, skipping next scheduled sequence update");
+    return;
+  }
+  
   // Check if current_playlist exists before accessing it
   if (!isset($fppStatus->current_playlist) || $fppStatus->current_playlist === null) {
     logEntry_verbose("Current playlist is null, skipping next scheduled sequence update");
@@ -565,6 +579,21 @@ function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextSchedul
   }
 
   $currentPlaylist = $fppStatus->current_playlist->playlist;
+  
+  // Check if current playlist is the background playlist - if so, don't update next scheduled
+  if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "") {
+    if (strcasecmp(trim($currentPlaylist), trim($GLOBALS['backgroundPlaylist'])) === 0) {
+      logEntry_verbose("Current playlist is background, skipping next scheduled sequence update");
+      // Clear next scheduled if it's not already empty
+      if ($nextScheduledInRF != "" && $nextScheduledInRF != " ") {
+        clearNextScheduledSequence($remoteToken);
+        $GLOBALS['nextScheduledInRF'] = " ";
+        logEntry("Cleared next scheduled sequence (background playlist)");
+      }
+      return;
+    }
+  }
+  
   $playlistDetails = getPlaylistDetails(rawurlencode($currentPlaylist));
 
   if($playlistDetails != null && $playlistDetails != '') {
