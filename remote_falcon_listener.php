@@ -8,6 +8,32 @@ $startupMsg = "[" . date('Y-m-d H:i:s') . "] SCRIPT STARTUP - PID: {$myPid} - Ve
 error_log("RemoteFalcon[{$myPid}]: SCRIPT STARTUP - Version: {$PLUGIN_VERSION}");
 @file_put_contents($logFile, $startupMsg, FILE_APPEND | LOCK_EX);
 
+// Define logging functions early so they can be used throughout
+function logEntry($data) {
+	global $logFile, $myPid;
+	
+	// Triple-redundant logging approach
+	$timestamp = date('Y-m-d H:i:s');
+	$message = "[{$timestamp}] [PID:{$myPid}] {$data}\n";
+	
+	// Method 1: error_log to syslog
+	error_log("RemoteFalcon[{$myPid}]: {$data}");
+	
+	// Method 2: Direct file write with error suppression
+	@file_put_contents($logFile, $message, FILE_APPEND | LOCK_EX);
+	
+	// Method 3: Fallback to stderr
+	if (defined('STDERR')) {
+		@fwrite(STDERR, $message);
+	}
+}
+
+function logEntry_verbose($data) {
+	if (isset($GLOBALS['verboseLogging']) && $GLOBALS['verboseLogging'] == 1) {
+		logEntry("[VERBOSE] " . $data);
+	}
+}
+
 // CLI-friendly setup without common.php HTML output
 $pluginName = basename(dirname(__FILE__));
 $settings = array(
@@ -853,34 +879,7 @@ function sendFppHeartbeat($remoteToken) {
   }
 }
 
-// Standalone logging system - no FPP dependencies
-function logEntry($data) {
-	global $logFile, $myPid;
-	
-	// Triple-redundant logging approach
-	$timestamp = date('Y-m-d H:i:s');
-	$message = "[{$timestamp}] [PID:{$myPid}] {$data}\n";
-	
-	// Method 1: error_log to syslog
-	error_log("RemoteFalcon[{$myPid}]: {$data}");
-	
-	// Method 2: Direct file write with error suppression
-	@file_put_contents($logFile, $message, FILE_APPEND | LOCK_EX);
-	
-	// Method 3: Fallback to stderr
-	if (defined('STDERR')) {
-		@fwrite(STDERR, $message);
-	}
-}
-
-function logEntry_verbose($data) {
-	if ($GLOBALS['verboseLogging'] == 1) {
-		logEntry("[VERBOSE] " . $data);
-	}
-}
-
-
-function isQueueEmpty($remoteToken, $viewerControlMode) {
+function isQueueEmpty
   $nextPlaylist = nextPlaylistInQueue($remoteToken);
   if ($nextPlaylist->nextPlaylist != null) {
     return false;
