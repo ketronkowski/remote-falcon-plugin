@@ -132,6 +132,9 @@ $lastModeSwitch = 0;
 $enableBackgroundMode = false;
 $backgroundPlaylist = "";
 
+// Local queue tracking
+$localQueue = array();
+$lastQueueRefresh = 0;
 
 // Heartbeat tracking
 $lastHeartbeatTime = 0;
@@ -520,6 +523,20 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
         insertPlaylistImmediate(rawurlencode($remotePlaylist), $nextInQueue->playlistIndex);
         $GLOBALS['lastQueuedSequence'] = "";
         $GLOBALS['lastQueuedTime'] = time();
+        
+        // Try to fetch additional songs and add to local queue
+        logEntry("Attempting to peek for additional queued songs...");
+        for ($i = 0; $i < 5; $i++) { // Try up to 5 times to get more songs
+          $peeked = peekNextPlaylistInQueue($remoteToken);
+          if ($peeked != null && isset($peeked->nextPlaylist) && $peeked->nextPlaylist != null) {
+            addToLocalQueue($peeked->nextPlaylist);
+            logEntry("Added '" . $peeked->nextPlaylist . "' to local queue");
+          } else {
+            break; // No more songs
+          }
+        }
+        $GLOBALS['lastQueueRefresh'] = time();
+        
         return;
       }
     }
@@ -538,6 +555,8 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           // Set to empty so updateCurrentlyPlaying will set to "Background Tunes"
           $GLOBALS['currentlyPlayingInRF'] = "";
           $GLOBALS['nextScheduledInRF'] = "";
+          // Clear local queue when entering background mode
+          clearLocalQueue();
           return;
         }
       }
@@ -579,6 +598,19 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           // Track the interrupt time
           $GLOBALS['lastQueuedSequence'] = $nextSequence;
           $GLOBALS['lastQueuedTime'] = time();
+          
+          // Try to fetch additional songs and add to local queue
+          logEntry("Attempting to peek for additional queued songs...");
+          for ($i = 0; $i < 5; $i++) { // Try up to 5 times to get more songs
+            $peeked = peekNextPlaylistInQueue($remoteToken);
+            if ($peeked != null && isset($peeked->nextPlaylist) && $peeked->nextPlaylist != null) {
+              addToLocalQueue($peeked->nextPlaylist);
+              logEntry("Added '" . $peeked->nextPlaylist . "' to local queue");
+            } else {
+              break; // No more songs
+            }
+          }
+          $GLOBALS['lastQueueRefresh'] = time();
 
           $fppWaitTime = $requestFetchTime + $additionalWaitTime;
           logEntry("Sleeping for " . $fppWaitTime . " seconds.");
@@ -611,6 +643,9 @@ function updateCurrentlyPlaying($currentlyPlaying, $currentlyPlayingInRF, $remot
     updateWhatsPlaying($currentlyPlaying, $remoteToken);
     logEntry("Updated current playing sequence to " . $currentlyPlaying);
     $GLOBALS['currentlyPlayingInRF'] = $currentlyPlaying;
+    
+    // Remove this song from local queue if it was there
+    removeFromLocalQueue($currentlyPlaying);
   }
 }
 
@@ -667,20 +702,25 @@ function updateNextScheduledSequence($fppStatus, $currentlyPlaying, $nextSchedul
           return;
         }
         
-        // Peek at the queue to see what's next (without dequeuing)
+        // First check local queue, then peek at the API as fallback
         $viewerControlMode = $GLOBALS['viewerControlMode'];
-        $nextSongName = null;
+        $nextSongName = getNextFromLocalQueue();
         
-        if ($viewerControlMode == "voting") {
-          $highestVoted = highestVotedSequence($GLOBALS['remoteToken']);
-          if (isset($highestVoted->winningPlaylist) && $highestVoted->winningPlaylist != null) {
-            $nextSongName = $highestVoted->winningPlaylist;
+        if ($nextSongName == null) {
+          // Local queue empty, try API
+          if ($viewerControlMode == "voting") {
+            $highestVoted = highestVotedSequence($GLOBALS['remoteToken']);
+            if (isset($highestVoted->winningPlaylist) && $highestVoted->winningPlaylist != null) {
+              $nextSongName = $highestVoted->winningPlaylist;
+            }
+          } else {
+            $nextInQueue = peekNextPlaylistInQueue($GLOBALS['remoteToken']);
+            if (isset($nextInQueue->nextPlaylist) && $nextInQueue->nextPlaylist != null) {
+              $nextSongName = $nextInQueue->nextPlaylist;
+            }
           }
         } else {
-          $nextInQueue = peekNextPlaylistInQueue($GLOBALS['remoteToken']);
-          if (isset($nextInQueue->nextPlaylist) && $nextInQueue->nextPlaylist != null) {
-            $nextSongName = $nextInQueue->nextPlaylist;
-          }
+          logEntry_verbose("Using next song from local queue: " . $nextSongName);
         }
         
         // If there's a next song, show it; otherwise show Background Tunes
@@ -1056,6 +1096,35 @@ function startBackgroundPlaylist($backgroundPlaylist) {
   
   logEntry("Successfully started background playlist: " . $backgroundPlaylist);
   return true;
+}
+
+// Local queue management functions
+function addToLocalQueue($songName) {
+  if ($songName != null && $songName != "") {
+    $GLOBALS['localQueue'][] = $songName;
+    logEntry("Added to local queue: " . $songName . " (queue size: " . count($GLOBALS['localQueue']) . ")");
+  }
+}
+
+function removeFromLocalQueue($songName) {
+  $key = array_search($songName, $GLOBALS['localQueue']);
+  if ($key !== false) {
+    unset($GLOBALS['localQueue'][$key]);
+    $GLOBALS['localQueue'] = array_values($GLOBALS['localQueue']); // Re-index
+    logEntry("Removed from local queue: " . $songName . " (queue size: " . count($GLOBALS['localQueue']) . ")");
+  }
+}
+
+function getNextFromLocalQueue() {
+  if (count($GLOBALS['localQueue']) > 0) {
+    return $GLOBALS['localQueue'][0];
+  }
+  return null;
+}
+
+function clearLocalQueue() {
+  $GLOBALS['localQueue'] = array();
+  logEntry("Cleared local queue");
 }
 
 ?>
