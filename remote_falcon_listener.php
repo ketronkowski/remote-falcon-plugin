@@ -460,6 +460,14 @@ function doInterruptStuff($fppStatus, $requestFetchTime, $viewerControlMode, $ad
           $fppWaitTime = $requestFetchTime + $additionalWaitTime;
           logEntry("Sleeping for " . $fppWaitTime . " seconds.");
           sleep($fppWaitTime);
+        } else {
+          // No requests found - activate background mode if configured
+          if ($GLOBALS['enableBackgroundMode'] && $GLOBALS['backgroundPlaylist'] != "" && !$GLOBALS['inBackgroundMode']) {
+            logEntry("No requests in interrupt mode. Switching to background playlist mode");
+            switchToBackground($GLOBALS['backgroundPlaylist']);
+            $GLOBALS['inBackgroundMode'] = true;
+            $GLOBALS['lastModeSwitch'] = time();
+          }
         }
       }
       $end_time = microtime(true);
